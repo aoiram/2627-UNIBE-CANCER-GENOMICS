@@ -3,3 +3,8 @@
 **.zip
 **.e
 **.o
+data/
+**.snakemake.log
+**.fq.gz
+**/metadata/*
+**.log

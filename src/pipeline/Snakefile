@@ -1,0 +1,199 @@
+# ==============================================================================
+# Snakemake Pipeline: Somatic Variant Calling Workflow
+# Structured sequentially with numbered directories and strict data chaining.
+# ==============================================================================
+
+SAMPLES = ["normal", "tumor"]
+
+# ------------------------------------------------------------------------------
+# Fixed Reference & Resource Paths (from the IBU cluster)
+# ------------------------------------------------------------------------------
+BASE_DIR     = "/data/users/apiatkowska/cancer_genomics/TMP/VAR_CALLING"
+REF_FASTA    = f"{BASE_DIR}/bwa_idx/genome.fa"
+INTERVALS    = f"{BASE_DIR}/reference/exome_regions.bed.interval_list"
+DBSNP        = f"{BASE_DIR}/dbsnp/GCF_000001405.40_alias.vcf.gz"
+KNOWN_INDELS = f"{BASE_DIR}/known_indels/resources_broad_hg38_v0_Mills_and_1000G_gold_standard.indels.hg38.vcf.gz"
+GERMLINE_RES = f"{BASE_DIR}/resources/af-only-gnomad.hg38.subset.vcf.gz"
+PON          = f"{BASE_DIR}/resources/1000g_pon.hg38.subset.vcf.gz"
+CLINVAR      = f"{BASE_DIR}/clinvar/clinvar.vcf.gz"
+VEP_CACHE    = "/data/.vep"
+
+rule all:
+    input:
+        expand("02_qc/multiqc_report.html", sample=SAMPLES),
+#    input:
+#        expand("02_qc/{sample}.R1.fastqc.html", sample=SAMPLES),
+#        expand("02_qc/{sample}.R2.fastqc.html", sample=SAMPLES),
+
+# ==============================================================================
+# 01 & 02: Initial QC & Pre-processing (Cleaned Data)
+# ==============================================================================
+
+rule fastqc:
+    input:
+        r1=f"{BASE_DIR}/fastq/{{sample}}.R1.fq.gz",
+        r2=f"{BASE_DIR}/fastq/{{sample}}.R2.fq.gz"
+    output:
+        html1="02_qc/{sample}.R1_fastqc.html", # _ because I didn't manage to change to . in output (lazy boy)
+        html2="02_qc/{sample}.R2_fastqc.html"
+    threads: 4
+    singularity: "/containers/apptainer/fastqc-0.12.1.sif" #
+    shell:
+        """
+        fastqc -t {threads} -o 02_qc {input.r1} {input.r2}
+        """
+
+rule fastp:
+    input:
+        r1=f"{BASE_DIR}/fastq/{{sample}}.R1.fq.gz",
+        r2=f"{BASE_DIR}/fastq/{{sample}}.R2.fq.gz"
+    output:
+        r1="01_cleaned_data/{sample}.R1.fq.gz",
+        r2="01_cleaned_data/{sample}.R2.fq.gz",
+        html="02_qc/{sample}_fastp.html"
+    singularity: "/containers/apptainer/fastp_0.24.1.sif" #
+    shell:
+        """
+        fastp -i {input.r1} -I {input.r2} \
+              -o {output.r1} -O {output.r2} \
+              -h {output.html}
+        """
+
+# ==============================================================================
+# 03: Read Alignment
+# ==============================================================================
+
+rule bwa_mem2_align:
+    input:
+        r1="01_cleaned_data/{sample}.R1.fq.gz",
+        r2="01_cleaned_data/{sample}.R2.fq.gz"
+    output:
+        bam=temp("03_alignment/{sample}_aligned.bam")
+    threads: 8
+    params:
+        ref=REF_FASTA,
+        # Use Python f-string style wildcards to dynamically insert the sample name
+        rg=r"@RG\tID:{sample}\tSM:{sample}\tPL:ILLUMINA"
+    singularity: "/containers/apptainer/bwa_0.7.19_samtools_1.21.sif"
+    shell:
+        """
+        # Pass the formatted Read Group string inside single quotes
+        bwa mem -t 4 -R '{params.rg}' {params.ref} {input.r1} {input.r2} | \
+        samtools view -b -@ 4 -o {output.bam} -
+        """
+
+rule samtools_sort_index:
+    input:
+        bam="03_alignment/{sample}_aligned.bam"
+    output:
+        bam="03_alignment/{sample}_sorted.bam",
+        bai="03_alignment/{sample}_sorted.bam.bai"
+    threads: 8
+    singularity: "/containers/apptainer/bwa_0.7.19_samtools_1.21.sif" #[cite: 1]
+    shell:
+        """
+        samtools sort -@ {threads} {input.bam} -o {output.bam}
+        samtools index {output.bam}
+        """
+
+# ==============================================================================
+# 04: BAM Preprocessing (MarkDuplicates & BQSR)
+# ==============================================================================
+
+rule mark_duplicates:
+    input:
+        bam="03_alignment/{sample}_sorted.bam"
+    output:
+        bam="04_preprocessing/{sample}_marked.bam", #[cite: 1]
+        bai="04_preprocessing/{sample}_marked.bam.bai",
+        metrics="02_qc/{sample}_marked_dup_metrics.txt"
+    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif" #[cite: 1]
+    shell:
+        """
+        gatk MarkDuplicates -I {input.bam} -O {output.bam} -M {output.metrics}
+        samtools index {output.bam}
+        """
+
+rule baserecalibrator:
+    input:
+        bam="04_preprocessing/{sample}_marked.bam" #[cite: 1]
+    output:
+        table="04_preprocessing/{sample}_recal.table"
+    params:
+        ref=REF_FASTA,
+        dbsnp=DBSNP,
+        indels=KNOWN_INDELS
+    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif" #[cite: 1]
+    shell:
+        """
+        gatk BaseRecalibrator -R {params.ref} -I {input.bam} \
+             --known-sites {params.dbsnp} \
+             --known-sites {params.indels} \
+             -O {output.table}
+        """
+
+rule apply_bqsr:
+    input:
+        bam="04_preprocessing/{sample}_marked.bam", #[cite: 1]
+        table="04_preprocessing/{sample}_recal.table"
+    output:
+        bam="04_preprocessing/{sample}_bqsr.bam", #[cite: 1]
+        bai="04_preprocessing/{sample}_bqsr.bam.bai"
+    params:
+        ref=REF_FASTA
+    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif" #[cite: 1]
+    shell:
+        """
+        gatk ApplyBQSR -R {params.ref} -I {input.bam} \
+             --bqsr-recal-file {input.table} \
+             -O {output.bam}
+        samtools index {output.bam}
+        """
+
+# ==============================================================================
+# 02: Post-Alignment QC Aggregation (Metrics & MultiQC)
+# ==============================================================================
+
+rule samtools_flagstat:
+    input:
+        bam="04_preprocessing/{sample}_bqsr.bam"
+    output:
+        txt="02_qc/{sample}_flagstat.txt"
+    threads: 4
+    singularity: "/containers/apptainer/bcftools:1.21--h8b25389_0" #[cite: 1]
+    shell:
+        """
+        samtools flagstat -@ {threads} {input.bam} > {output.txt}
+        """
+
+rule collect_hs_metrics:
+    input:
+        bam="04_preprocessing/{sample}_bqsr.bam"
+    output:
+        metrics="02_qc/{sample}_bqsr_hs_metrics.txt"
+    params:
+        ref=REF_FASTA,
+        intervals=INTERVALS
+    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif" #[cite: 1]
+    shell:
+        """
+        gatk CollectHsMetrics -I {input.bam} -O {output.metrics} \
+             -R {params.ref} \
+             --BAIT_INTERVALS {params.intervals} \
+             --TARGET_INTERVALS {params.intervals}
+        """
+
+rule multiqc:
+    input:
+        expand("02_qc/{sample}.R1_fastqc.html", sample=SAMPLES),
+        expand("02_qc/{sample}_fastp.html", sample=SAMPLES),
+        expand("02_qc/{sample}_marked_dup_metrics.txt", sample=SAMPLES),
+        expand("02_qc/{sample}_bqsr_hs_metrics.txt", sample=SAMPLES),
+        expand("02_qc/{sample}_flagstat.txt", sample=SAMPLES)
+    output:
+        "02_qc/multiqc_report.html"
+    singularity: "/containers/apptainer/multiqc-1.33.sif" #[cite: 1]
+    shell:
+        """
+        multiqc 02_qc/ -o 02_qc/
+        """
