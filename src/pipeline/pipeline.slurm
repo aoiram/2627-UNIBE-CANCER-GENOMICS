@@ -13,7 +13,7 @@
 # Clean previous runs
 find . -name "slurm-*.out" ! -name "slurm-${SLURM_JOB_ID}.out" -delete
 
-sleep 5
+sleep 3
 
 module load snakemake/6.6.1-foss-2021a
 

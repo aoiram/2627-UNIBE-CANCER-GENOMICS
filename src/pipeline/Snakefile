@@ -197,3 +197,114 @@ rule multiqc:
         """
         multiqc 02_qc/ -o 02_qc/
         """
+
+### BREAKING ZONE
+
+
+# ==============================================================================
+# 05: Somatic Variant Calling & Filtering
+# ==============================================================================
+
+rule mutect2:
+    input:
+        tumor="04_preprocessing/tumor_bqsr.bam", #[cite: 1]
+        normal="04_preprocessing/normal_bqsr.bam" #[cite: 1]
+    output:
+        vcf="05_variants/somatic.vcf.gz"
+    params:
+        ref=REF_FASTA,
+        intervals=INTERVALS,
+        germline=GERMLINE_RES,
+        pon=PON
+    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif" #[cite: 1]
+    shell:
+        """
+        gatk Mutect2 -R {params.ref} \
+             --intervals {params.intervals} \
+             -I {input.tumor} -I {input.normal} \
+             -normal normal \
+             --germline-resource {params.germline} \
+             --panel-of-normals {params.pon} \
+             -O {output.vcf}
+        """
+
+rule filter_mutect_calls:
+    input:
+        vcf="05_variants/somatic.vcf.gz"
+    output:
+        vcf="05_variants/somatic.filtered.vcf.gz"
+    params:
+        ref=REF_FASTA
+    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif" #[cite: 1]
+    shell:
+        """
+        gatk FilterMutectCalls -R {params.ref} -V {input.vcf} -O {output.vcf}
+        """
+
+rule extract_pass_variants:
+    input:
+        vcf="05_variants/somatic.filtered.vcf.gz"
+    output:
+        vcf="05_variants/somatic.filtered.PASS.vcf.gz",
+        tbi="05_variants/somatic.filtered.PASS.vcf.gz.tbi"
+    singularity: "bcftools.img" #[cite: 1]
+    shell:
+        """
+        bcftools view -f PASS {input.vcf} -Oz > {output.vcf}
+        bcftools index --tbi {output.vcf}
+        """
+
+# ==============================================================================
+# 05: Variant Annotation (VEP) & Interpretation
+# ==============================================================================
+
+rule vep_annotate:
+    input:
+        vcf="05_variants/somatic.filtered.PASS.vcf.gz"
+    output:
+        txt="05_variants/chr6ch17_mutect2_annotated_with_clinVar.txt"
+    threads: 2
+    params:
+        cache=VEP_CACHE,
+        clinvar=CLINVAR
+    singularity: "vep.sif" #[cite: 1]
+    shell:
+        """
+        vep -i {input.vcf} \
+            --cache --dir_cache {params.cache} \
+            --assembly GRCh38 \
+            --species homo_sapiens \
+            --offline \
+            --format vcf \
+            --force_overwrite \
+            --fork {threads} \
+            --everything \
+            --custom {params.clinvar},ClinVar,vcf,exact,0,CLNSIG,CLNREVSTAT,CLNDN \
+            --output_file {output.txt}
+        """
+
+rule filter_vep:
+    input:
+        txt="05_variants/chr6ch17_mutect2_annotated_with_clinVar.txt"
+    output:
+        txt="05_variants/chr6ch17_mutect2_annotated_with_clinVar_filtered.txt"
+    singularity: "vep.sif" #[cite: 1]
+    shell:
+        """
+        filter_vep -i {input.txt} -o {output.txt} \
+            --force_overwrite \
+            --filter "(IMPACT is HIGH or IMPACT is MODERATE) or \
+                      (SIFT match deleterious or PolyPhen match probably_damaging) or \
+                      (ClinVar_CLNSIG match pathogenic)"
+        """
+
+rule summarize_variants:
+    input:
+        txt="05_variants/chr6ch17_mutect2_annotated_with_clinVar_filtered.txt"
+    output:
+        txt="05_variants/summary.txt"
+    shell:
+        """
+        echo "Mutation Type Summary:" > {output.txt}
+        grep -v "#" {input.txt} | cut -f7 | sort | uniq -c >> {output.txt}
+        """
