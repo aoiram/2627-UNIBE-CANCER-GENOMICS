@@ -1,6 +1,6 @@
 # Cancer Genomics
 
-## Team
+## Group 7
 
 - Mario Amos
 - Isaac Ambrogetti
