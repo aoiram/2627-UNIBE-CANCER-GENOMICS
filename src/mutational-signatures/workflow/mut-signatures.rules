@@ -1,0 +1,51 @@
+configfile: "src/mutational-signatures/config_main.yaml"
+
+# ------------------------------------------------------------------------------
+WORKDIR = config["WORKDIR"]
+DATA = config["DATADIR"]
+OUTDIR = config["FINALOUTPUT"]
+SCRIPT_DIR = config["SCRIPTDIR"]
+
+SAMPLE_META = config["SAMPLE_META"]
+SAMPLES = [row.split("\t")[0] for row in open(SAMPLE_META).read().splitlines()[1:]]
+
+
+rule all:
+    input:
+        expand(f"{OUTDIR}/barplot_channels/{{sample}}_6channels.svg", sample=SAMPLES),
+        # expand(f"{OUTDIR}/barplot_channels/{{sample}}_96channels.svg", sample=SAMPLES)
+
+# -------------------------------------------------------------
+# 01 script for 6 channels output
+
+rule bar_plots_6channels:
+    input:
+        f"{DATA}/{{sample}}.vcf"
+    output:
+        f"{OUTDIR}/barplot_channels/{{sample}}_6channels.svg"
+    params:
+        script_dir=SCRIPT_DIR,
+        output_dir=f"{OUTDIR}/barplot_channels"
+    threads: 1
+    resources:
+        mem_mb=4000,
+        runtime=10
+    shell:
+        "python3 {params.script_dir}/01-6channels.py --input {input} --output {params.output_dir}"
+
+# -------------------------------------------------------------
+# 02 script for 96 channels output
+rule bar_plots_96channels:
+    input:
+        f"{DATA}/{{sample}}.vcf"
+    output:
+        f"{OUTDIR}/barplot_channels/{{sample}}_96channels.svg"
+    params:
+        script_dir=SCRIPT_DIR,
+        output_dir=f"{OUTDIR}/barplot_channels"
+    threads: 1
+    resources:
+        mem_mb=4000,
+        runtime=30
+    shell:
+        "python3 {params.script_dir}/02-96channels.py --input {input} --output {params.output_dir}"

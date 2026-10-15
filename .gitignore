@@ -7,4 +7,6 @@ data/
 **.snakemake.log
 **.fq.gz
 **/metadata/*
-**.log
+logs/
+output/
+__pycache__

@@ -1,0 +1,12 @@
+__default__:
+  partition: pibu_el8
+  mem: 4G
+  time: "00:10:00"
+
+bar_plots_6channels:
+  mem: 4G
+  time: "00:10:00"
+
+bar_plots_96channels:
+  mem: 4G
+  time: "00:30:00"

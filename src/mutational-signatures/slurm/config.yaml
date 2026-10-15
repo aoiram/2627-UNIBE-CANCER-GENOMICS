@@ -1,0 +1,15 @@
+jobs: 10
+latency-wait: 60
+rerun-incomplete: true
+printshellcmds: true
+keep-going: false
+cluster-config: /data/users/iambrogetti/2526-unibe-cancer-genomics/src/mutational-signatures/slurm/cluster.yaml
+cluster: >-
+  sbatch
+  --partition={cluster.partition}
+  --cpus-per-task={threads}
+  --mem={cluster.mem}
+  --time={cluster.time}
+  --job-name=smk-{rule}-{jobid}
+  --output=/data/users/iambrogetti/2526-unibe-cancer-genomics/logs/barplots/slurm-%x-%j.out
+  --error=/data/users/iambrogetti/2526-unibe-cancer-genomics/logs/barplots/slurm-%x-%j.err
