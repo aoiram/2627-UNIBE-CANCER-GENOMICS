@@ -2,11 +2,11 @@
 #SBATCH --job-name=class_assignment
 #SBATCH --partition=pibu_el8
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=8
-#SBATCH --mem=32G
-#SBATCH --time=02:00:00
-#SBATCH --account=class-407009-ws-2026
-#SBATCH --reservation=class-407009-2026-10-08
+#SBATCH --ntasks-per-node=12
+#SBATCH --mem=48G
+#SBATCH --time=06:00:00
+##SBATCH --account=class-407009-ws-2026 # Comment if out of reservation schedule
+##SBATCH --reservation=class-407009-2026-10-08 # Comment if out of reservation schedule
 #SBATCH --mail-user=mario.amos@students.unibe.ch
 #SBATCH --mail-type=end
 
@@ -37,9 +37,10 @@ export PATH=~/.tmp_bin:$PATH
 # Pre-create the sequentially numbered directories to ensure clean execution
 mkdir -p 01_cleaned_data 02_qc 03_alignment 04_preprocessing 05_variants
 
-# Execute Snakemake with Singularity enabled.
-# --bind mounts the storage and data paths so the containers can resolve the files.
-snakemake --cores 8 \
+# Note : There can be some folder locking issues when a job get interrupted
+#        (ig by the end of the course reservation schedule),
+#        just add --unlock and rerun to unlock and then rerun normally
+snakemake --cores 12 --default-resources "threads=12" \
           --use-singularity \
-          --singularity-args "--bind /data,/containers" \
+          --singularity-args "--bind /data,/containers,$PWD --pwd $PWD" \
           --rerun-incomplete

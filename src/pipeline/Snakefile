@@ -89,7 +89,7 @@ rule samtools_sort_index:
         bam="03_alignment/{sample}_sorted.bam",
         bai="03_alignment/{sample}_sorted.bam.bai"
     threads: 8
-    singularity: "/containers/apptainer/bwa_0.7.19_samtools_1.21.sif" #[cite: 1]
+    singularity: "/containers/apptainer/bwa_0.7.19_samtools_1.21.sif"
     shell:
         """
         samtools sort -@ {threads} {input.bam} -o {output.bam}
@@ -104,10 +104,10 @@ rule mark_duplicates:
     input:
         bam="03_alignment/{sample}_sorted.bam"
     output:
-        bam="04_preprocessing/{sample}_marked.bam", #[cite: 1]
+        bam="04_preprocessing/{sample}_marked.bam",
         bai="04_preprocessing/{sample}_marked.bam.bai",
         metrics="02_qc/{sample}_marked_dup_metrics.txt"
-    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif" #[cite: 1]
+    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif"
     shell:
         """
         gatk MarkDuplicates -I {input.bam} -O {output.bam} -M {output.metrics}
@@ -116,14 +116,14 @@ rule mark_duplicates:
 
 rule baserecalibrator:
     input:
-        bam="04_preprocessing/{sample}_marked.bam" #[cite: 1]
+        bam="04_preprocessing/{sample}_marked.bam"
     output:
         table="04_preprocessing/{sample}_recal.table"
     params:
         ref=REF_FASTA,
         dbsnp=DBSNP,
         indels=KNOWN_INDELS
-    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif" #[cite: 1]
+    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif"
     shell:
         """
         gatk BaseRecalibrator -R {params.ref} -I {input.bam} \
@@ -134,14 +134,14 @@ rule baserecalibrator:
 
 rule apply_bqsr:
     input:
-        bam="04_preprocessing/{sample}_marked.bam", #[cite: 1]
+        bam="04_preprocessing/{sample}_marked.bam",
         table="04_preprocessing/{sample}_recal.table"
     output:
-        bam="04_preprocessing/{sample}_bqsr.bam", #[cite: 1]
+        bam="04_preprocessing/{sample}_bqsr.bam",
         bai="04_preprocessing/{sample}_bqsr.bam.bai"
     params:
         ref=REF_FASTA
-    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif" #[cite: 1]
+    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif"
     shell:
         """
         gatk ApplyBQSR -R {params.ref} -I {input.bam} \
@@ -156,11 +156,14 @@ rule apply_bqsr:
 
 rule samtools_flagstat:
     input:
-        bam="04_preprocessing/{sample}_bqsr.bam"
+        bam="04_preprocessing/{sample}_bqsr.bam",
+        # Explicitly require the index so Snakemake ensures it exists
+        bai="04_preprocessing/{sample}_bqsr.bam.bai"
     output:
         txt="02_qc/{sample}_flagstat.txt"
-    threads: 4
-    singularity: "/containers/apptainer/bcftools:1.21--h8b25389_0" #[cite: 1]
+    threads: 8
+    # Switch to the container that actually contains samtools
+    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif"
     shell:
         """
         samtools flagstat -@ {threads} {input.bam} > {output.txt}
@@ -168,16 +171,19 @@ rule samtools_flagstat:
 
 rule collect_hs_metrics:
     input:
-        bam="04_preprocessing/{sample}_bqsr.bam"
+        bam="04_preprocessing/{sample}_bqsr.bam",
+        bai="04_preprocessing/{sample}_bqsr.bam.bai"
     output:
         metrics="02_qc/{sample}_bqsr_hs_metrics.txt"
     params:
         ref=REF_FASTA,
         intervals=INTERVALS
-    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif" #[cite: 1]
+    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif"
     shell:
         """
-        gatk CollectHsMetrics -I {input.bam} -O {output.metrics} \
+        gatk --java-options "-Xmx4G" CollectHsMetrics \
+             -I {input.bam} \
+             -O {output.metrics} \
              -R {params.ref} \
              --BAIT_INTERVALS {params.intervals} \
              --TARGET_INTERVALS {params.intervals}
@@ -192,7 +198,7 @@ rule multiqc:
         expand("02_qc/{sample}_flagstat.txt", sample=SAMPLES)
     output:
         "02_qc/multiqc_report.html"
-    singularity: "/containers/apptainer/multiqc-1.33.sif" #[cite: 1]
+    singularity: "/containers/apptainer/multiqc-1.33.sif"
     shell:
         """
         multiqc 02_qc/ -o 02_qc/
@@ -207,8 +213,8 @@ rule multiqc:
 
 rule mutect2:
     input:
-        tumor="04_preprocessing/tumor_bqsr.bam", #[cite: 1]
-        normal="04_preprocessing/normal_bqsr.bam" #[cite: 1]
+        tumor="04_preprocessing/tumor_bqsr.bam",
+        normal="04_preprocessing/normal_bqsr.bam"
     output:
         vcf="05_variants/somatic.vcf.gz"
     params:
@@ -216,7 +222,7 @@ rule mutect2:
         intervals=INTERVALS,
         germline=GERMLINE_RES,
         pon=PON
-    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif" #[cite: 1]
+    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif"
     shell:
         """
         gatk Mutect2 -R {params.ref} \
@@ -235,7 +241,7 @@ rule filter_mutect_calls:
         vcf="05_variants/somatic.filtered.vcf.gz"
     params:
         ref=REF_FASTA
-    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif" #[cite: 1]
+    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif"
     shell:
         """
         gatk FilterMutectCalls -R {params.ref} -V {input.vcf} -O {output.vcf}
@@ -247,7 +253,7 @@ rule extract_pass_variants:
     output:
         vcf="05_variants/somatic.filtered.PASS.vcf.gz",
         tbi="05_variants/somatic.filtered.PASS.vcf.gz.tbi"
-    singularity: "bcftools.img" #[cite: 1]
+    singularity: "bcftools.img"
     shell:
         """
         bcftools view -f PASS {input.vcf} -Oz > {output.vcf}
@@ -267,7 +273,7 @@ rule vep_annotate:
     params:
         cache=VEP_CACHE,
         clinvar=CLINVAR
-    singularity: "vep.sif" #[cite: 1]
+    singularity: "vep.sif"
     shell:
         """
         vep -i {input.vcf} \
@@ -288,7 +294,7 @@ rule filter_vep:
         txt="05_variants/chr6ch17_mutect2_annotated_with_clinVar.txt"
     output:
         txt="05_variants/chr6ch17_mutect2_annotated_with_clinVar_filtered.txt"
-    singularity: "vep.sif" #[cite: 1]
+    singularity: "vep.sif"
     shell:
         """
         filter_vep -i {input.txt} -o {output.txt} \
