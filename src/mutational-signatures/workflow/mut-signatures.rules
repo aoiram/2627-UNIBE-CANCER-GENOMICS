@@ -25,13 +25,14 @@ rule bar_plots_6channels:
         f"{OUTDIR}/barplot_channels/{{sample}}_6channels.svg"
     params:
         script_dir=SCRIPT_DIR,
-        output_dir=f"{OUTDIR}/barplot_channels"
+        output_dir=f"{OUTDIR}/barplot_channels",
+        container_path=config["CONTAINER_BARPLOT"]
     threads: 1
     resources:
         mem_mb=4000,
         runtime=10
     shell:
-        "python3 {params.script_dir}/01-6channels.py --input {input} --output {params.output_dir}"
+        "apptainer exec --bind /data {params.container_path} python3 {params.script_dir}/01-6channels.py --input {input} --output {params.output_dir}"
 
 # -------------------------------------------------------------
 # 02 script for 96 channels output
@@ -42,10 +43,11 @@ rule bar_plots_96channels:
         f"{OUTDIR}/barplot_channels/{{sample}}_96channels.svg"
     params:
         script_dir=SCRIPT_DIR,
-        output_dir=f"{OUTDIR}/barplot_channels"
+        output_dir=f"{OUTDIR}/barplot_channels",
+        container_path=config["CONTAINER_BARPLOT"]
     threads: 1
     resources:
         mem_mb=4000,
         runtime=30
     shell:
-        "python3 {params.script_dir}/02-96channels.py --input {input} --output {params.output_dir}"
+        "apptainer exec --bind /data {params.container_path} python3 {params.script_dir}/02-96channels.py --input {input} --output {params.output_dir}"

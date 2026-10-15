@@ -17,3 +17,7 @@ SAMPLE_META: /data/users/iambrogetti/2526-unibe-cancer-genomics/data/MUT_SIGNATU
 FINALOUTPUT: /data/users/iambrogetti/2526-unibe-cancer-genomics/output/mutational_signature
 SCRIPTDIR: /data/users/iambrogetti/2526-unibe-cancer-genomics/src/mutational-signatures/scripts
 SLURM_PROFILE: /data/users/iambrogetti/2526-unibe-cancer-genomics/src/mutational-signatures/slurm
+
+# ================== Containers ==================
+
+CONTAINER_BARPLOT: /containers/apptainer/proseg-downstream-python_0.1.0.sif
