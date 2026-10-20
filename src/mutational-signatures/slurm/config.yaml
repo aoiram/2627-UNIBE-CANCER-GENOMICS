@@ -11,5 +11,5 @@ cluster: >-
   --mem={cluster.mem}
   --time={cluster.time}
   --job-name=smk-{rule}-{jobid}
-  --output=/data/users/iambrogetti/2526-unibe-cancer-genomics/logs/barplots/slurm-%x-%j.out
-  --error=/data/users/iambrogetti/2526-unibe-cancer-genomics/logs/barplots/slurm-%x-%j.err
+  --output=/data/users/iambrogetti/2526-unibe-cancer-genomics/logs/out/slurm-%x-%j.out
+  --error=/data/users/iambrogetti/2526-unibe-cancer-genomics/logs/err/slurm-%x-%j.err
