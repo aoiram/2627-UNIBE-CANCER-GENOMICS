@@ -33,3 +33,5 @@ Then run the pipeline with this command:
 ```
 python src/mutational-signature/main-pipeline.py
 ```
+
+remember to load the snakemake environment (do not use conda env at least for the second command)
