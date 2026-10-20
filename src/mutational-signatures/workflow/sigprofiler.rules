@@ -1,0 +1,35 @@
+configfile: "src/mutational-signatures/config_main.yaml"
+
+# ------------------------------------------------------------------------------
+WORKDIR = config["WORKDIR"]
+DATA = config["DATADIR"]
+OUTDIR = config["FINALOUTPUT"]
+SCRIPT_DIR = config["SCRIPTDIR"]
+
+SAMPLE_META = config["SAMPLE_META"]
+SAMPLES = [row.split("\t")[0] for row in open(SAMPLE_META).read().splitlines()[1:]]
+
+rule all:
+    input:
+        expand(f"{OUTDIR}/sigprofiler/{{sample}}/Assignment_Solution/Activities/Assignment_Solution_Activities.txt", sample=SAMPLES),
+
+# -------------------------------------------------------------
+# 03 SigProfiler: SBS96 matrix generation + COSMIC fitting (exposures per sample)
+# Takes the VCF directly (no need for the samtools/TRINUC tables of steps 01-02)
+
+rule sigprofiler:
+    input:
+        f"{DATA}/{{sample}}.vcf"
+    output:
+        f"{OUTDIR}/sigprofiler/{{sample}}/Assignment_Solution/Activities/Assignment_Solution_Activities.txt"
+    params:
+        script_dir=SCRIPT_DIR,
+        output_dir=f"{OUTDIR}/sigprofiler/{{sample}}",
+        container_path=config["CONTAINER_SIGPROF"],
+        genome=config["GENOME_BUILD"]
+    threads: 16
+    resources:
+        mem_mb=64000,
+        runtime=120
+    shell:
+        "apptainer exec --bind /data {params.container_path} python3 {params.script_dir}/03-sigprofiler.py --input {input} --output {params.output_dir} --genome {params.genome} --threads {threads}"

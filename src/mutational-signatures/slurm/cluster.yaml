@@ -10,3 +10,7 @@ bar_plots_6channels:
 bar_plots_96channels:
   mem: 4G
   time: "00:30:00"
+
+sigprofiler:
+  mem: 64G
+  time: "02:00:00"
