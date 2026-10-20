@@ -13,7 +13,7 @@ SAMPLES = [row.split("\t")[0] for row in open(SAMPLE_META).read().splitlines()[1
 rule all:
     input:
         expand(f"{OUTDIR}/barplot_channels/{{sample}}_6channels.svg", sample=SAMPLES),
-        # expand(f"{OUTDIR}/barplot_channels/{{sample}}_96channels.svg", sample=SAMPLES)
+        expand(f"{OUTDIR}/barplot_channels/{{sample}}_96channels.svg", sample=SAMPLES)
 
 # -------------------------------------------------------------
 # 01 script for 6 channels output
@@ -44,10 +44,11 @@ rule bar_plots_96channels:
     params:
         script_dir=SCRIPT_DIR,
         output_dir=f"{OUTDIR}/barplot_channels",
-        container_path=config["CONTAINER_BARPLOT"]
+        container_path=config["CONTAINER_BARPLOT"],
+        reference=config["REFERENCE"]
     threads: 1
     resources:
         mem_mb=4000,
         runtime=30
     shell:
-        "apptainer exec --bind /data {params.container_path} python3 {params.script_dir}/02-96channels.py --input {input} --output {params.output_dir}"
+        "apptainer exec --bind /data {params.container_path} python3 {params.script_dir}/02-96channels.py --input {input} --output {params.output_dir} --reference {params.reference}"

@@ -1,86 +1,142 @@
-import pandas as pd
+import argparse
+from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
-import os
+import pandas as pd
 
-mutation_file_I = "MUTATIONS/DNA2406740.vcf_mut.tsv"
-mutation_file_I = "MUTATIONS/DNA2406784.vcf_mut.tsv"
-mutation_file_I = "MUTATIONS/DNA2408066.vcf_mut.tsv"
-mutation_file_I = "MUTATIONS/DNA2412161.vcf_mut.tsv"
-mutation_file_I = "MUTATIONS/DNA2505059.vcf_mut.tsv"
-mutation_file_I = "MUTATIONS/DNA2505926.vcf_mut.tsv"
-mutation_file_I = "MUTATIONS/DNA2506590.vcf_mut.tsv"
-mutation_file_I = "MUTATIONS/DNA2508977.vcf_mut.tsv"
-mutation_file_I = "MUTATIONS/DNA2510817.vcf_mut.tsv"
 
-filename_pic_O = mutation_file_I.replace('.tsv','_96channels.svg')
-filename_table_O = mutation_file_I.replace('.tsv','_table.tsv')
+parser = argparse.ArgumentParser(description="Create a 96-channel mutational spectrum.")
+parser.add_argument("--input", required=True, help="Path to an input VCF file")
+parser.add_argument("--output", required=True, help="Output directory")
+parser.add_argument("--reference", required=True, help="Indexed reference FASTA file")
+args = parser.parse_args()
 
-# Load prepared file
-df = pd.read_csv(mutation_file_I, sep="\t")
+input_path = Path(args.input)
+output_dir = Path(args.output)
+reference_path = Path(args.reference)
+output_dir.mkdir(parents=True, exist_ok=True)
 
-# Keep only SNVs
-df = df[(df["REF"].str.len() == 1) & (df["ALT"].str.len() == 1) & (df["TRINUC"].str.len() == 3)]
+if not reference_path.with_suffix(reference_path.suffix + ".fai").is_file():
+    raise FileNotFoundError(
+        f"Reference index not found: {reference_path}.fai. "
+        "Create it with samtools faidx before running the workflow."
+    )
 
-# Define the 6 substitution classes
+
+class IndexedFasta:
+    def __init__(self, fasta_path):
+        self.fasta_path = fasta_path
+        self.contigs = {}
+        with fasta_path.with_suffix(fasta_path.suffix + ".fai").open() as index:
+            for line in index:
+                name, length, offset, line_bases, line_width = line.rstrip().split("\t")
+                self.contigs[name] = (
+                    int(length),
+                    int(offset),
+                    int(line_bases),
+                    int(line_width),
+                )
+
+    def sequence(self, contig, start, end):
+        if contig not in self.contigs:
+            return None
+
+        length, offset, line_bases, line_width = self.contigs[contig]
+        if start < 0 or end > length or start >= end:
+            return None
+
+        sequence = bytearray()
+        with self.fasta_path.open("rb") as fasta:
+            position = start
+            while position < end:
+                line_number, column = divmod(position, line_bases)
+                read_length = min(end - position, line_bases - column)
+                fasta.seek(offset + line_number * line_width + column)
+                sequence.extend(fasta.read(read_length))
+                position += read_length
+        return sequence.decode("ascii").upper()
+
+
+reference = IndexedFasta(reference_path)
+vcf_columns = [
+    "CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO",
+    "FORMAT", "SAMPLE",
+]
+df = pd.read_csv(
+    input_path,
+    sep="\t",
+    comment="#",
+    header=None,
+    names=vcf_columns,
+)
+
+df["POS"] = pd.to_numeric(df["POS"], errors="coerce")
+df = df.dropna(subset=["POS"])
+df["POS"] = df["POS"].astype(int)
+df["REF"] = df["REF"].astype(str).str.upper()
+df["ALT"] = df["ALT"].astype(str).str.split(",").str[0].str.upper()
+df = df[
+    df["REF"].str.len().eq(1)
+    & df["ALT"].str.len().eq(1)
+    & df["REF"].isin(["A", "C", "G", "T"])
+    & df["ALT"].isin(["A", "C", "G", "T"])
+]
+
 subs = ["C>A", "C>G", "C>T", "T>A", "T>C", "T>G"]
 bases = ["A", "C", "G", "T"]
+labels = [
+    f"{left}[{sub}]{right}"
+    for sub in subs
+    for left in bases
+    for right in bases
+]
+counts = pd.Series(0, index=labels, dtype=int)
+comp = {"A": "T", "T": "A", "C": "G", "G": "C"}
 
-# Build the 96-channel labels
-labels = []
-for sub in subs:
-    ref, _ = sub.split(">")
-    for left in bases:
-        for right in bases:
-            labels.append(f"{left}[{sub}]{right}")
-
-counts = pd.Series(0, index=labels)
-
-# Complement map for normalization
-comp = {"A":"T", "T":"A", "C":"G", "G":"C"}
-
-# Iterate mutations
 for _, row in df.iterrows():
-    ref, alt, ctx = row["REF"].upper(), row["ALT"].upper(), row["TRINUC"].upper()
-
-    # Center base in trinuc must match REF
-    if ctx[1] != ref:
+    ref, alt, position = row["REF"], row["ALT"], row["POS"]
+    context = reference.sequence(row["CHROM"], position - 2, position + 1)
+    if context is None or len(context) != 3 or context[1] != ref:
         continue
 
-    # Normalize to pyrimidine convention
     if ref in ["C", "T"]:
-        ref_norm, alt_norm, left, right = ref, alt, ctx[0], ctx[2]
+        ref_norm, alt_norm = ref, alt
+        left, right = context[0], context[2]
     else:
         ref_norm, alt_norm = comp[ref], comp[alt]
-        left, right = comp[ctx[2]], comp[ctx[0]]  # reverse complement
+        left, right = comp[context[2]], comp[context[0]]
 
-    sub = f"{ref_norm}>{alt_norm}"
-    label = f"{left}[{sub}]{right}"
-
+    label = f"{left}[{ref_norm}>{alt_norm}]{right}"
     if label in counts:
         counts[label] += 1
 
-# Plotting colors by substitution type
 colors = {
     "C>A": "#1f77b4",
     "C>G": "#ff7f0e",
     "C>T": "#2ca02c",
     "T>A": "#d62728",
     "T>C": "#9467bd",
-    "T>G": "#8c564b"
+    "T>G": "#8c564b",
 }
 
-plt.figure(figsize=(18,6))
-counts.plot(kind="bar", color=[colors[label[2:5]] for label in counts.index], width=1)
-
+plt.figure(figsize=(18, 6))
+counts.plot(
+    kind="bar",
+    color=[colors[label[2:5]] for label in counts.index],
+    width=1,
+)
 plt.ylabel("Mutation Counts")
 plt.xlabel("Trinucleotide Context")
 plt.title("96-channel Mutational Spectrum")
 plt.xticks(rotation=90, fontsize=6)
 plt.tight_layout()
-#plt.show()
 
-plt.savefig(filename_pic_O)
-
-counts.name = 'sample'
-
-counts.to_csv(filename_table_O,sep='\t',index=True)
+plot_path = output_dir / f"{input_path.stem}_96channels.svg"
+table_path = output_dir / f"{input_path.stem}_table.tsv"
+plt.savefig(plot_path)
+counts.name = input_path.stem
+counts.to_csv(table_path, sep="\t", index=True)
