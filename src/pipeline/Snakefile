@@ -1,5 +1,5 @@
 # ==============================================================================
-# Snakemake Pipeline: Somatic Variant Calling Workflow
+# Snakemake Pipeline: Somatic Variant Calling & Mutational Signatures Workflow
 # Structured sequentially with numbered directories and strict data chaining.
 # ==============================================================================
 
@@ -8,22 +8,32 @@ SAMPLES = ["normal", "tumor"]
 # ------------------------------------------------------------------------------
 # Fixed Reference & Resource Paths (from the IBU cluster)
 # ------------------------------------------------------------------------------
-BASE_DIR     = "/data/users/apiatkowska/cancer_genomics/TMP/VAR_CALLING"
+BASE_DIR     = "/data/courses/cancergenomics/VAR_CALLING"
 REF_FASTA    = f"{BASE_DIR}/bwa_idx/genome.fa"
 INTERVALS    = f"{BASE_DIR}/reference/exome_regions.bed.interval_list"
 DBSNP        = f"{BASE_DIR}/dbsnp/GCF_000001405.40_alias.vcf.gz"
 KNOWN_INDELS = f"{BASE_DIR}/known_indels/resources_broad_hg38_v0_Mills_and_1000G_gold_standard.indels.hg38.vcf.gz"
 GERMLINE_RES = f"{BASE_DIR}/resources/af-only-gnomad.hg38.subset.vcf.gz"
 PON          = f"{BASE_DIR}/resources/1000g_pon.hg38.subset.vcf.gz"
-CLINVAR      = f"{BASE_DIR}/clinvar/clinvar.vcf.gz"
-VEP_CACHE    = "/data/.vep"
+CLINVAR      = f"{BASE_DIR}/resources/clinvar/clinvar.vcf.gz"
+VEP_CACHE    = "/data/courses/cancergenomics/2026/VEP/vep_data"
+
+# Verify exact container filenames on the IBU cluster via: ls /containers/apptainer/
+SIF_FASTQC   = "/containers/apptainer/fastqc-0.12.1.sif"
+SIF_FASTP    = "/containers/apptainer/fastp_0.24.1.sif"
+SIF_BWA_SAM  = "/containers/apptainer/bwa_0.7.19_samtools_1.21.sif"
+SIF_GATK     = "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif"
+SIF_MULTIQC  = "/containers/apptainer/multiqc-1.33.sif"
+SIF_BCFTOOLS = "/containers/apptainer/bcftools:1.21--h8b25389_0"  # Update version if needed
+SIF_VEP      = "/data/courses/cancergenomics/2026/VEP/vep.sif"        # Update version if needed
 
 rule all:
     input:
-        expand("02_qc/multiqc_report.html", sample=SAMPLES),
-#    input:
-#        expand("02_qc/{sample}.R1.fastqc.html", sample=SAMPLES),
-#        expand("02_qc/{sample}.R2.fastqc.html", sample=SAMPLES),
+        "02_qc/multiqc_report.html",
+        "05_variants/summary.txt",
+        "06_mut_signatures/somatic_6channels.svg",
+        "06_mut_signatures/somatic_96channels.svg",
+        "06_mut_signatures/somatic_mut_table.tsv"
 
 # ==============================================================================
 # 01 & 02: Initial QC & Pre-processing (Cleaned Data)
@@ -34,10 +44,10 @@ rule fastqc:
         r1=f"{BASE_DIR}/fastq/{{sample}}.R1.fq.gz",
         r2=f"{BASE_DIR}/fastq/{{sample}}.R2.fq.gz"
     output:
-        html1="02_qc/{sample}.R1_fastqc.html", # _ because I didn't manage to change to . in output (lazy boy)
+        html1="02_qc/{sample}.R1_fastqc.html",
         html2="02_qc/{sample}.R2_fastqc.html"
     threads: 4
-    singularity: "/containers/apptainer/fastqc-0.12.1.sif" #
+    singularity: SIF_FASTQC
     shell:
         """
         fastqc -t {threads} -o 02_qc {input.r1} {input.r2}
@@ -50,20 +60,23 @@ rule fastp:
     output:
         r1="01_cleaned_data/{sample}.R1.fq.gz",
         r2="01_cleaned_data/{sample}.R2.fq.gz",
-        html="02_qc/{sample}_fastp.html"
-    singularity: "/containers/apptainer/fastp_0.24.1.sif" #
+        html="02_qc/{sample}_fastp.html",
+        json="02_qc/{sample}_fastp.json"
+    threads: 4
+    singularity: SIF_FASTP
     shell:
         """
-        fastp -i {input.r1} -I {input.r2} \
+        fastp -w {threads} \
+              -i {input.r1} -I {input.r2} \
               -o {output.r1} -O {output.r2} \
-              -h {output.html}
+              -h {output.html} -j {output.json}
         """
 
 # ==============================================================================
 # 03: Read Alignment
 # ==============================================================================
 
-rule bwa_mem2_align:
+rule bwa_mem_align:
     input:
         r1="01_cleaned_data/{sample}.R1.fq.gz",
         r2="01_cleaned_data/{sample}.R2.fq.gz"
@@ -72,14 +85,12 @@ rule bwa_mem2_align:
     threads: 8
     params:
         ref=REF_FASTA,
-        # Use Python f-string style wildcards to dynamically insert the sample name
         rg=r"@RG\tID:{sample}\tSM:{sample}\tPL:ILLUMINA"
-    singularity: "/containers/apptainer/bwa_0.7.19_samtools_1.21.sif"
+    singularity: SIF_BWA_SAM
     shell:
         """
-        # Pass the formatted Read Group string inside single quotes
-        bwa mem -t 4 -R '{params.rg}' {params.ref} {input.r1} {input.r2} | \
-        samtools view -b -@ 4 -o {output.bam} -
+        bwa mem -t 6 -R '{params.rg}' {params.ref} {input.r1} {input.r2} | \
+        samtools view -b -@ 2 -o {output.bam} -
         """
 
 rule samtools_sort_index:
@@ -89,11 +100,11 @@ rule samtools_sort_index:
         bam="03_alignment/{sample}_sorted.bam",
         bai="03_alignment/{sample}_sorted.bam.bai"
     threads: 8
-    singularity: "/containers/apptainer/bwa_0.7.19_samtools_1.21.sif"
+    singularity: SIF_BWA_SAM
     shell:
         """
         samtools sort -@ {threads} {input.bam} -o {output.bam}
-        samtools index {output.bam}
+        samtools index -@ {threads} {output.bam}
         """
 
 # ==============================================================================
@@ -102,12 +113,13 @@ rule samtools_sort_index:
 
 rule mark_duplicates:
     input:
-        bam="03_alignment/{sample}_sorted.bam"
+        bam="03_alignment/{sample}_sorted.bam",
+        bai="03_alignment/{sample}_sorted.bam.bai"
     output:
         bam="04_preprocessing/{sample}_marked.bam",
         bai="04_preprocessing/{sample}_marked.bam.bai",
         metrics="02_qc/{sample}_marked_dup_metrics.txt"
-    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif"
+    singularity: SIF_GATK
     shell:
         """
         gatk MarkDuplicates -I {input.bam} -O {output.bam} -M {output.metrics}
@@ -116,17 +128,20 @@ rule mark_duplicates:
 
 rule baserecalibrator:
     input:
-        bam="04_preprocessing/{sample}_marked.bam"
+        bam="04_preprocessing/{sample}_marked.bam",
+        bai="04_preprocessing/{sample}_marked.bam.bai"
     output:
         table="04_preprocessing/{sample}_recal.table"
     params:
         ref=REF_FASTA,
         dbsnp=DBSNP,
-        indels=KNOWN_INDELS
-    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif"
+        indels=KNOWN_INDELS,
+        intervals=INTERVALS
+    singularity: SIF_GATK
     shell:
         """
         gatk BaseRecalibrator -R {params.ref} -I {input.bam} \
+             -L {params.intervals} \
              --known-sites {params.dbsnp} \
              --known-sites {params.indels} \
              -O {output.table}
@@ -135,16 +150,19 @@ rule baserecalibrator:
 rule apply_bqsr:
     input:
         bam="04_preprocessing/{sample}_marked.bam",
+        bai="04_preprocessing/{sample}_marked.bam.bai",
         table="04_preprocessing/{sample}_recal.table"
     output:
         bam="04_preprocessing/{sample}_bqsr.bam",
         bai="04_preprocessing/{sample}_bqsr.bam.bai"
     params:
-        ref=REF_FASTA
-    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif"
+        ref=REF_FASTA,
+        intervals=INTERVALS
+    singularity: SIF_GATK
     shell:
         """
         gatk ApplyBQSR -R {params.ref} -I {input.bam} \
+             -L {params.intervals} \
              --bqsr-recal-file {input.table} \
              -O {output.bam}
         samtools index {output.bam}
@@ -157,13 +175,11 @@ rule apply_bqsr:
 rule samtools_flagstat:
     input:
         bam="04_preprocessing/{sample}_bqsr.bam",
-        # Explicitly require the index so Snakemake ensures it exists
         bai="04_preprocessing/{sample}_bqsr.bam.bai"
     output:
         txt="02_qc/{sample}_flagstat.txt"
     threads: 8
-    # Switch to the container that actually contains samtools
-    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif"
+    singularity: SIF_GATK
     shell:
         """
         samtools flagstat -@ {threads} {input.bam} > {output.txt}
@@ -171,14 +187,17 @@ rule samtools_flagstat:
 
 rule collect_hs_metrics:
     input:
+        # Chained strictly to your pipeline's BQSR output:
         bam="04_preprocessing/{sample}_bqsr.bam",
         bai="04_preprocessing/{sample}_bqsr.bam.bai"
+        # Or uncomment below to use instructor pre-aligned BAMs:
+        # bam=f"{BASE_DIR}/alignments/{{sample}}.recal.bam"
     output:
         metrics="02_qc/{sample}_bqsr_hs_metrics.txt"
     params:
         ref=REF_FASTA,
         intervals=INTERVALS
-    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif"
+    singularity: SIF_GATK
     shell:
         """
         gatk --java-options "-Xmx4G" CollectHsMetrics \
@@ -192,20 +211,18 @@ rule collect_hs_metrics:
 rule multiqc:
     input:
         expand("02_qc/{sample}.R1_fastqc.html", sample=SAMPLES),
+        expand("02_qc/{sample}.R2_fastqc.html", sample=SAMPLES),
         expand("02_qc/{sample}_fastp.html", sample=SAMPLES),
         expand("02_qc/{sample}_marked_dup_metrics.txt", sample=SAMPLES),
         expand("02_qc/{sample}_bqsr_hs_metrics.txt", sample=SAMPLES),
         expand("02_qc/{sample}_flagstat.txt", sample=SAMPLES)
     output:
         "02_qc/multiqc_report.html"
-    singularity: "/containers/apptainer/multiqc-1.33.sif"
+    singularity: SIF_MULTIQC
     shell:
         """
-        multiqc 02_qc/ -o 02_qc/
+        multiqc -f 02_qc/ -o 02_qc/ -n multiqc_report.html
         """
-
-### BREAKING ZONE
-
 
 # ==============================================================================
 # 05: Somatic Variant Calling & Filtering
@@ -213,16 +230,23 @@ rule multiqc:
 
 rule mutect2:
     input:
+        # Chained strictly to your pipeline's BQSR BAMs:
         tumor="04_preprocessing/tumor_bqsr.bam",
-        normal="04_preprocessing/normal_bqsr.bam"
+        tumor_bai="04_preprocessing/tumor_bqsr.bam.bai",
+        normal="04_preprocessing/normal_bqsr.bam",
+        normal_bai="04_preprocessing/normal_bqsr.bam.bai"
+        # Or uncomment below to use instructor pre-aligned BAMs:
+        # tumor=f"{BASE_DIR}/alignments/tumor.recal.bam",
+        # normal=f"{BASE_DIR}/alignments/normal.recal.bam"
     output:
-        vcf="05_variants/somatic.vcf.gz"
+        vcf="05_variants/somatic.vcf.gz",
+        stats="05_variants/somatic.vcf.gz.stats"
     params:
         ref=REF_FASTA,
         intervals=INTERVALS,
         germline=GERMLINE_RES,
         pon=PON
-    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif"
+    singularity: SIF_GATK
     shell:
         """
         gatk Mutect2 -R {params.ref} \
@@ -236,15 +260,16 @@ rule mutect2:
 
 rule filter_mutect_calls:
     input:
-        vcf="05_variants/somatic.vcf.gz"
+        vcf="05_variants/somatic.vcf.gz",
+        stats="05_variants/somatic.vcf.gz.stats"
     output:
         vcf="05_variants/somatic.filtered.vcf.gz"
     params:
         ref=REF_FASTA
-    singularity: "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif"
+    singularity: SIF_GATK
     shell:
         """
-        gatk FilterMutectCalls -R {params.ref} -V {input.vcf} -O {output.vcf}
+        gatk FilterMutectCalls -R {params.ref} -V {input.vcf} --stats {input.stats} -O {output.vcf}
         """
 
 rule extract_pass_variants:
@@ -253,27 +278,28 @@ rule extract_pass_variants:
     output:
         vcf="05_variants/somatic.filtered.PASS.vcf.gz",
         tbi="05_variants/somatic.filtered.PASS.vcf.gz.tbi"
-    singularity: "bcftools.img"
+    singularity: SIF_BCFTOOLS
     shell:
         """
-        bcftools view -f PASS {input.vcf} -Oz > {output.vcf}
+        bcftools view -f PASS {input.vcf} -Oz -o {output.vcf}
         bcftools index --tbi {output.vcf}
         """
 
 # ==============================================================================
-# 05: Variant Annotation (VEP) & Interpretation
+# 05b: Variant Annotation (VEP) & Interpretation
 # ==============================================================================
 
 rule vep_annotate:
     input:
-        vcf="05_variants/somatic.filtered.PASS.vcf.gz"
+        vcf="05_variants/somatic.filtered.PASS.vcf.gz",
+        tbi="05_variants/somatic.filtered.PASS.vcf.gz.tbi"
     output:
         txt="05_variants/chr6ch17_mutect2_annotated_with_clinVar.txt"
     threads: 2
     params:
         cache=VEP_CACHE,
         clinvar=CLINVAR
-    singularity: "vep.sif"
+    singularity: SIF_VEP
     shell:
         """
         vep -i {input.vcf} \
@@ -286,7 +312,7 @@ rule vep_annotate:
             --fork {threads} \
             --everything \
             --custom {params.clinvar},ClinVar,vcf,exact,0,CLNSIG,CLNREVSTAT,CLNDN \
-            --output_file {output.txt}
+            --output_file {output.txt} \
         """
 
 rule filter_vep:
@@ -294,7 +320,7 @@ rule filter_vep:
         txt="05_variants/chr6ch17_mutect2_annotated_with_clinVar.txt"
     output:
         txt="05_variants/chr6ch17_mutect2_annotated_with_clinVar_filtered.txt"
-    singularity: "vep.sif"
+    singularity: SIF_VEP
     shell:
         """
         filter_vep -i {input.txt} -o {output.txt} \
@@ -312,5 +338,48 @@ rule summarize_variants:
     shell:
         """
         echo "Mutation Type Summary:" > {output.txt}
-        grep -v "#" {input.txt} | cut -f7 | sort | uniq -c >> {output.txt}
+        grep -v "^#" {input.txt} | cut -f7 | sort | uniq -c >> {output.txt}
         """
+
+# ==============================================================================
+# 06: Mutational Signatures (From Provided Lecture Slides)
+# ==============================================================================
+
+rule prepare_trinuc_table:
+    """
+    Extracts SNVs from the PASS VCF, queries +/- 1bp context via samtools faidx
+    as shown in the Mutational Signatures slides, and outputs REF, ALT, TRINUC.
+    """
+    input:
+        vcf="05_variants/somatic.filtered.PASS.vcf.gz",
+        ref=REF_FASTA
+    output:
+        tsv="06_mut_signatures/somatic_vcf_mut.tsv"
+    singularity: SIF_BWA_SAM
+    shell:
+        r"""
+        echo -e "REF\tALT\tTRINUC" > {output.tsv}
+        zgrep -v "^#" {input.vcf} | awk 'length($4)==1 && length($5)==1 {{print $1, $2, $4, $5}}' | \
+        while read chr pos ref alt; do
+            start=$((pos - 1))
+            end=$((pos + 1))
+            trinuc=$(samtools faidx {input.ref} "${{chr}}:${{start}}-${{end}}" | tail -n 1 | tr 'a-z' 'A-Z')
+            echo -e "${{ref}}\t${{alt}}\t${{trinuc}}" >> {output.tsv}
+        done
+        """
+
+rule plot_mutational_channels:
+    """
+    Generates the 6-channel and 96-channel plots and count matrix (for MutationalPatterns)
+    directly using the Python logic from the Mutational Signatures slides.
+    """
+    input:
+        tsv="06_mut_signatures/somatic_vcf_mut.tsv"
+    output:
+        plot6="06_mut_signatures/somatic_6channels.svg",
+        plot96="06_mut_signatures/somatic_96channels.svg",
+        table96="06_mut_signatures/somatic_mut_table.tsv"
+    conda:
+        "envs/plot.yaml"
+    script:
+        "scripts/plot.py"

@@ -8,3 +8,10 @@ data/
 **.fq.gz
 **/metadata/*
 **.log
+**/0*_*
+.snakemake
+.cache
+.java
+**.sif
+**.out
+**.json
