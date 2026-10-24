@@ -188,10 +188,10 @@ rule samtools_flagstat:
 rule collect_hs_metrics:
     input:
         # Chained strictly to your pipeline's BQSR output:
-        bam="04_preprocessing/{sample}_bqsr.bam",
-        bai="04_preprocessing/{sample}_bqsr.bam.bai"
+        # bam="04_preprocessing/{sample}_bqsr.bam",
+        bai="04_preprocessing/{sample}_bqsr.bam.bai",
         # Or uncomment below to use instructor pre-aligned BAMs:
-        # bam=f"{BASE_DIR}/alignments/{{sample}}.recal.bam"
+        bam=f"{BASE_DIR}/alignments/{{sample}}.recal.bam"
     output:
         metrics="02_qc/{sample}_bqsr_hs_metrics.txt"
     params:
