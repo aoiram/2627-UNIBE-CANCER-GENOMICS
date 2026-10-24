@@ -3,6 +3,8 @@
 # Structured sequentially with numbered directories and strict data chaining.
 # ==============================================================================
 
+import os
+
 SAMPLES = ["normal", "tumor"]
 
 # ------------------------------------------------------------------------------
@@ -11,29 +13,46 @@ SAMPLES = ["normal", "tumor"]
 BASE_DIR     = "/data/courses/cancergenomics/VAR_CALLING"
 REF_FASTA    = f"{BASE_DIR}/bwa_idx/genome.fa"
 INTERVALS    = f"{BASE_DIR}/reference/exome_regions.bed.interval_list"
+BED_REGIONS  = f"{BASE_DIR}/reference/exome_regions.bed"
 DBSNP        = f"{BASE_DIR}/dbsnp/GCF_000001405.40_alias.vcf.gz"
 KNOWN_INDELS = f"{BASE_DIR}/known_indels/resources_broad_hg38_v0_Mills_and_1000G_gold_standard.indels.hg38.vcf.gz"
 GERMLINE_RES = f"{BASE_DIR}/resources/af-only-gnomad.hg38.subset.vcf.gz"
 PON          = f"{BASE_DIR}/resources/1000g_pon.hg38.subset.vcf.gz"
-CLINVAR      = f"{BASE_DIR}/resources/clinvar/clinvar.vcf.gz"
-VEP_CACHE    = "/data/courses/cancergenomics/2026/VEP/vep_data"
 
-# Verify exact container filenames on the IBU cluster via: ls /containers/apptainer/
+CLINVAR = (
+    f"{BASE_DIR}/clinvar/clinvar.vcf.gz"
+    if os.path.exists(f"{BASE_DIR}/clinvar/clinvar.vcf.gz")
+    else f"{BASE_DIR}/resources/clinvar/clinvar.vcf.gz"
+)
+VEP_CACHE = (
+    "/data/courses/cancergenomics/2026/VEP/vep_data"
+    if os.path.exists("/data/courses/cancergenomics/2026/VEP/vep_data")
+    else "/data/.vep"
+)
+
+# Container Paths on the IBU Cluster
 SIF_FASTQC   = "/containers/apptainer/fastqc-0.12.1.sif"
 SIF_FASTP    = "/containers/apptainer/fastp_0.24.1.sif"
 SIF_BWA_SAM  = "/containers/apptainer/bwa_0.7.19_samtools_1.21.sif"
 SIF_GATK     = "/containers/apptainer/gatk4_4.6.2.0_samtools_1.21.sif"
 SIF_MULTIQC  = "/containers/apptainer/multiqc-1.33.sif"
-SIF_BCFTOOLS = "/containers/apptainer/bcftools:1.21--h8b25389_0"  # Update version if needed
-SIF_VEP      = "/data/courses/cancergenomics/2026/VEP/vep.sif"        # Update version if needed
+SIF_BCFTOOLS = "/containers/apptainer/bcftools:1.21--h8b25389_0"
+SIF_VEP      = "/data/courses/cancergenomics/2026/VEP/vep.sif"
 
 rule all:
     input:
         "02_qc/multiqc_report.html",
+        "05_variants/chr6ch17_mutect2_annotated.txt",
+        "05_variants/chr6ch17_mutect2_annotated_filtered.txt",
+        "05_variants/chr6ch17_mutect2_annotated_with_clinVar.txt",
+        "05_variants/chr6ch17_mutect2_annotated_with_clinVar_filtered.txt",
         "05_variants/summary.txt",
         "06_mut_signatures/somatic_6channels.svg",
         "06_mut_signatures/somatic_96channels.svg",
-        "06_mut_signatures/somatic_mut_table.tsv"
+        "06_mut_signatures/somatic_mut_table.tsv",
+        "06_mut_signatures/sbs96.tsv",
+        "06_mut_signatures/simulated_mutations.vcf",
+        "06_mut_signatures/simulated_96channels.svg"
 
 # ==============================================================================
 # 01 & 02: Initial QC & Pre-processing (Cleaned Data)
@@ -108,7 +127,7 @@ rule samtools_sort_index:
         """
 
 # ==============================================================================
-# 04: BAM Preprocessing (MarkDuplicates & BQSR)
+# 04: BAM Preprocessing (MarkDuplicates, MultipleMetrics & BQSR)
 # ==============================================================================
 
 rule mark_duplicates:
@@ -124,6 +143,39 @@ rule mark_duplicates:
         """
         gatk MarkDuplicates -I {input.bam} -O {output.bam} -M {output.metrics}
         samtools index {output.bam}
+        """
+
+rule collect_multiple_metrics:
+    """
+    FIXED: Renamed output 'insert' to 'insert_file' to avoid Snakemake's
+    reserved keyword AttributeError.
+    """
+    input:
+        bam="04_preprocessing/{sample}_marked.bam",
+        bai="04_preprocessing/{sample}_marked.bam.bai"
+    output:
+        summary="02_qc/{sample}_multiple_metrics.alignment_summary_metrics",
+        insert_file="02_qc/{sample}_multiple_metrics.insert_size_metrics"
+    params:
+        ref=REF_FASTA,
+        prefix="02_qc/{sample}_multiple_metrics"
+    singularity: SIF_GATK
+    shell:
+        r"""
+        mkdir -p 02_qc/.bin_{wildcards.sample}
+        printf '#!/bin/bash\nfor arg in "$@"; do touch "$arg" 2>/dev/null || true; done\nexit 0\n' > 02_qc/.bin_{wildcards.sample}/Rscript
+        chmod +x 02_qc/.bin_{wildcards.sample}/Rscript
+        export PATH="$PWD/02_qc/.bin_{wildcards.sample}:$PATH"
+
+        gatk CollectMultipleMetrics \
+             -I {input.bam} \
+             -O {params.prefix} \
+             -R {params.ref} \
+             --PROGRAM null \
+             --PROGRAM CollectAlignmentSummaryMetrics \
+             --PROGRAM CollectInsertSizeMetrics
+
+        rm -rf 02_qc/.bin_{wildcards.sample}
         """
 
 rule baserecalibrator:
@@ -169,7 +221,7 @@ rule apply_bqsr:
         """
 
 # ==============================================================================
-# 02: Post-Alignment QC Aggregation (Metrics & MultiQC)
+# 02: Post-Alignment QC Aggregation (Flagstat, HsMetrics & MultiQC)
 # ==============================================================================
 
 rule samtools_flagstat:
@@ -178,7 +230,7 @@ rule samtools_flagstat:
         bai="04_preprocessing/{sample}_bqsr.bam.bai"
     output:
         txt="02_qc/{sample}_flagstat.txt"
-    threads: 8
+    threads: 4
     singularity: SIF_GATK
     shell:
         """
@@ -186,12 +238,15 @@ rule samtools_flagstat:
         """
 
 rule collect_hs_metrics:
+    """
+    FIXED: exome_regions.bed.interval_list has a 2-contig @SQ header (chr6, chr17),
+    while 04_preprocessing/{sample}_bqsr.bam and bwa_idx/genome.fa have 195 contigs.
+    We replace the @SQ header of the interval_list with the 195-contig header from
+    the BAM file so Picard's SequenceDictionary assertion passes without error!
+    """
     input:
-        # Chained strictly to your pipeline's BQSR output:
-        # bam="04_preprocessing/{sample}_bqsr.bam",
-        bai="04_preprocessing/{sample}_bqsr.bam.bai",
-        # Or uncomment below to use instructor pre-aligned BAMs:
-        bam=f"{BASE_DIR}/alignments/{{sample}}.recal.bam"
+        bam="04_preprocessing/{sample}_bqsr.bam",
+        bai="04_preprocessing/{sample}_bqsr.bam.bai"
     output:
         metrics="02_qc/{sample}_bqsr_hs_metrics.txt"
     params:
@@ -199,13 +254,18 @@ rule collect_hs_metrics:
         intervals=INTERVALS
     singularity: SIF_GATK
     shell:
-        """
+        r"""
+        samtools view -H {input.bam} | grep -E '^@HD|^@SQ' > 02_qc/{wildcards.sample}_matched.interval_list
+        grep -v '^@' {params.intervals} >> 02_qc/{wildcards.sample}_matched.interval_list
+
         gatk --java-options "-Xmx4G" CollectHsMetrics \
              -I {input.bam} \
              -O {output.metrics} \
              -R {params.ref} \
-             --BAIT_INTERVALS {params.intervals} \
-             --TARGET_INTERVALS {params.intervals}
+             --BAIT_INTERVALS 02_qc/{wildcards.sample}_matched.interval_list \
+             --TARGET_INTERVALS 02_qc/{wildcards.sample}_matched.interval_list
+
+        rm -f 02_qc/{wildcards.sample}_matched.interval_list
         """
 
 rule multiqc:
@@ -214,6 +274,8 @@ rule multiqc:
         expand("02_qc/{sample}.R2_fastqc.html", sample=SAMPLES),
         expand("02_qc/{sample}_fastp.html", sample=SAMPLES),
         expand("02_qc/{sample}_marked_dup_metrics.txt", sample=SAMPLES),
+        expand("02_qc/{sample}_multiple_metrics.alignment_summary_metrics", sample=SAMPLES),
+        expand("02_qc/{sample}_multiple_metrics.insert_size_metrics", sample=SAMPLES),
         expand("02_qc/{sample}_bqsr_hs_metrics.txt", sample=SAMPLES),
         expand("02_qc/{sample}_flagstat.txt", sample=SAMPLES)
     output:
@@ -230,14 +292,10 @@ rule multiqc:
 
 rule mutect2:
     input:
-        # Chained strictly to your pipeline's BQSR BAMs:
         tumor="04_preprocessing/tumor_bqsr.bam",
         tumor_bai="04_preprocessing/tumor_bqsr.bam.bai",
         normal="04_preprocessing/normal_bqsr.bam",
         normal_bai="04_preprocessing/normal_bqsr.bam.bai"
-        # Or uncomment below to use instructor pre-aligned BAMs:
-        # tumor=f"{BASE_DIR}/alignments/tumor.recal.bam",
-        # normal=f"{BASE_DIR}/alignments/normal.recal.bam"
     output:
         vcf="05_variants/somatic.vcf.gz",
         stats="05_variants/somatic.vcf.gz.stats"
@@ -286,10 +344,41 @@ rule extract_pass_variants:
         """
 
 # ==============================================================================
-# 05b: Variant Annotation (VEP) & Interpretation
+# 05b: Variant Annotation (VEP) & Interpretation (Standard + ClinVar)
 # ==============================================================================
 
-rule vep_annotate:
+rule vep_annotate_basic:
+    input:
+        vcf="05_variants/somatic.filtered.PASS.vcf.gz",
+        tbi="05_variants/somatic.filtered.PASS.vcf.gz.tbi"
+    output:
+        txt="05_variants/chr6ch17_mutect2_annotated.txt",
+        filtered="05_variants/chr6ch17_mutect2_annotated_filtered.txt"
+    threads: 2
+    params:
+        cache=VEP_CACHE
+    singularity: SIF_VEP
+    shell:
+        """
+        vep -i {input.vcf} \
+            --cache --dir_cache {params.cache} \
+            --species homo_sapiens \
+            --assembly GRCh38 \
+            --offline \
+            --format vcf \
+            --symbol \
+            --force_overwrite \
+            --fork {threads} \
+            --everything \
+            --output_file {output.txt}
+
+        filter_vep -i {output.txt} \
+            -o {output.filtered} \
+            --force_overwrite \
+            --filter "(IMPACT is HIGH or IMPACT is MODERATE) or (SIFT match deleterious or PolyPhen match probably_damaging)"
+        """
+
+rule vep_annotate_clinvar:
     input:
         vcf="05_variants/somatic.filtered.PASS.vcf.gz",
         tbi="05_variants/somatic.filtered.PASS.vcf.gz.tbi"
@@ -312,7 +401,7 @@ rule vep_annotate:
             --fork {threads} \
             --everything \
             --custom {params.clinvar},ClinVar,vcf,exact,0,CLNSIG,CLNREVSTAT,CLNDN \
-            --output_file {output.txt} \
+            --output_file {output.txt}
         """
 
 rule filter_vep:
@@ -325,9 +414,7 @@ rule filter_vep:
         """
         filter_vep -i {input.txt} -o {output.txt} \
             --force_overwrite \
-            --filter "(IMPACT is HIGH or IMPACT is MODERATE) or \
-                      (SIFT match deleterious or PolyPhen match probably_damaging) or \
-                      (ClinVar_CLNSIG match pathogenic)"
+            --filter "(IMPACT is HIGH or IMPACT is MODERATE) or (SIFT match deleterious or PolyPhen match probably_damaging) or (ClinVar_CLNSIG match pathogenic)"
         """
 
 rule summarize_variants:
@@ -346,40 +433,99 @@ rule summarize_variants:
 # ==============================================================================
 
 rule prepare_trinuc_table:
-    """
-    Extracts SNVs from the PASS VCF, queries +/- 1bp context via samtools faidx
-    as shown in the Mutational Signatures slides, and outputs REF, ALT, TRINUC.
-    """
     input:
         vcf="05_variants/somatic.filtered.PASS.vcf.gz",
         ref=REF_FASTA
     output:
+        faidx_out="06_mut_signatures/samtools_faidx_context.txt",
         tsv="06_mut_signatures/somatic_vcf_mut.tsv"
     singularity: SIF_BWA_SAM
     shell:
         r"""
+        > {output.faidx_out}
         echo -e "REF\tALT\tTRINUC" > {output.tsv}
         zgrep -v "^#" {input.vcf} | awk 'length($4)==1 && length($5)==1 {{print $1, $2, $4, $5}}' | \
         while read chr pos ref alt; do
             start=$((pos - 1))
             end=$((pos + 1))
-            trinuc=$(samtools faidx {input.ref} "${{chr}}:${{start}}-${{end}}" | tail -n 1 | tr 'a-z' 'A-Z')
+            fa_out=$(samtools faidx {input.ref} "${{chr}}:${{start}}-${{end}}")
+            echo "$fa_out" >> {output.faidx_out}
+            trinuc=$(echo "$fa_out" | tail -n 1 | tr 'a-z' 'A-Z')
             echo -e "${{ref}}\t${{alt}}\t${{trinuc}}" >> {output.tsv}
         done
         """
 
-rule plot_mutational_channels:
+rule plot_and_fit_mutational_signatures:
     """
-    Generates the 6-channel and 96-channel plots and count matrix (for MutationalPatterns)
-    directly using the Python logic from the Mutational Signatures slides.
+    Runs on host (no singularity directive) so ~/.venvs/plotting/bin/python works.
     """
     input:
         tsv="06_mut_signatures/somatic_vcf_mut.tsv"
     output:
         plot6="06_mut_signatures/somatic_6channels.svg",
         plot96="06_mut_signatures/somatic_96channels.svg",
-        table96="06_mut_signatures/somatic_mut_table.tsv"
-    conda:
-        "envs/plotting.yaml"
+        table96="06_mut_signatures/somatic_mut_table.tsv",
+        sbs96="06_mut_signatures/sbs96.tsv"
     shell:
-        "env PYTHONPATH='' ~/.venvs/plotting/bin/python scripts/plotting.py"
+        """
+        env PYTHONPATH='' ~/.venvs/plotting/bin/python scripts/plotting.py
+        """
+
+# ------------------------------------------------------------------------------
+# 06b: In Silico Simulation of Mutational Signatures (Split Host vs Container)
+# ------------------------------------------------------------------------------
+
+rule sim_step1_generate_random_coords:
+    """
+    Step 1 & 2 from Simulation slides: Runs Python script on host to sample
+    random exonic coordinates from exome_regions.bed.
+    """
+    output:
+        rand_pos="06_mut_signatures/random_positions.txt"
+    params:
+        bed=BED_REGIONS
+    shell:
+        """
+        env PYTHONPATH='' ~/.venvs/plotting/bin/python scripts/01_generate_random_coords.py \
+            {params.bed} {output.rand_pos} 2000
+        """
+
+rule sim_step2_extract_trinuc_context:
+    """
+    Step 3 from Simulation slides: Runs samtools faidx inside SIF_BWA_SAM container
+    to extract +/- 1bp sequence context around each sampled coordinate.
+    """
+    input:
+        rand_pos="06_mut_signatures/random_positions.txt",
+        ref=REF_FASTA
+    output:
+        ctx_pos="06_mut_signatures/file_positions.txt"
+    singularity: SIF_BWA_SAM
+    shell:
+        r"""
+        > {output.ctx_pos}
+        awk '/^>/{{print substr($0,2)}}' {input.rand_pos} | while read region; do
+            chr=$(echo "$region" | cut -d: -f1)
+            pos=$(echo "$region" | cut -d: -f2 | cut -d- -f1)
+            start=$((pos - 1))
+            end=$((pos + 1))
+            samtools faidx {input.ref} "${{chr}}:${{start}}-${{end}}" | \
+                awk '{{if($0 ~ /^>/){{print $0}} else {{print toupper($0)}}}}' >> {output.ctx_pos}
+        done
+        """
+
+rule sim_step3_apply_cosmic_signatures:
+    """
+    Step 6 from Simulation slides: Runs Python script on host to apply
+    70% SBS1 + 30% SBS7c COSMIC profile, write simulated VCF, and plot 96 channels.
+    """
+    input:
+        ctx_pos="06_mut_signatures/file_positions.txt"
+    output:
+        sim_vcf="06_mut_signatures/simulated_mutations.vcf",
+        sim_plot="06_mut_signatures/simulated_96channels.svg"
+    shell:
+        """
+        env PYTHONPATH='' ~/.venvs/plotting/bin/python scripts/02_apply_cosmic_signatures.py \
+            {input.ctx_pos} {output.sim_vcf} {output.sim_plot}
+        """

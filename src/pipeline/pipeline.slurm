@@ -2,7 +2,7 @@
 #SBATCH --job-name=class_assignment
 #SBATCH --partition=pibu_el8
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=12
+#SBATCH --ntasks-per-node=8
 #SBATCH --mem=48G
 #SBATCH --time=06:00:00
 ##SBATCH --account=class-407009-ws-2026 # Comment if out of reservation schedule
@@ -13,12 +13,11 @@
 # Clean previous runs
 find . -name "slurm-*.out" ! -name "slurm-${SLURM_JOB_ID}.out" -delete
 
-sleep 3
+sleep 2
 
 module load snakemake/6.6.1-foss-2021a
 
 # --- APPTAINER VERSION WORKAROUND ---
-# Create a fake 'singularity' command that returns a version Snakemake 6 expects
 mkdir -p ~/.tmp_bin
 cat << 'EOF' > ~/.tmp_bin/singularity
 #!/bin/bash
@@ -29,28 +28,27 @@ else
 fi
 EOF
 chmod +x ~/.tmp_bin/singularity
-
-# Prioritize our fake singularity in the system PATH
 export PATH=~/.tmp_bin:$PATH
 # ------------------------------------
 
-# Pre-create the sequentially numbered directories to ensure clean execution
-mkdir -p 01_cleaned_data 02_qc 03_alignment 04_preprocessing 05_variants 06_mut_signatures
+# Pre-create sequentially numbered directories and scripts directory
+mkdir -p 01_cleaned_data 02_qc 03_alignment 04_preprocessing 05_variants 06_mut_signatures scripts
 
-## For the last part
-#rm -rf ~/.venvs/plotting
-## Create venv inheriting cluster modules
-#python3 -m venv ~/.venvs/plotting
-## Notice the path: bin/activate
-#source ~/.venvs/plotting/bin/activate
-## Install matplotlib directly into the venv
-## Force install into the virtual environment isolated from the cluster's modules
-#env PYTHONPATH="" ~/.venvs/plotting/bin/pip install --no-cache-dir --ignore-installed pandas matplotlib
-env PYTHONPATH="" ~/.venvs/plotting/bin/python -c "import pandas, matplotlib; print('Venv ready!')"
+# Ensure Python virtual environment has required packages
+if [ ! -d "$HOME/.venvs/plotting" ]; then
+    python3 -m venv ~/.venvs/plotting
+    env PYTHONPATH="" ~/.venvs/plotting/bin/pip install --no-cache-dir --ignore-installed pandas matplotlib numpy scipy
+else
+    env PYTHONPATH="" ~/.venvs/plotting/bin/pip install --quiet pandas matplotlib numpy scipy
+fi
 
-# Note : There can be some folder locking issues when a job get interrupted
-#        (ig by the end of the course reservation schedule),
-snakemake --cores 12 --default-resources "threads=12" \
+env PYTHONPATH="" ~/.venvs/plotting/bin/python -c "import pandas, matplotlib, numpy, scipy; print('Venv ready!')"
+
+# Unlock in case previous run was interrupted
+snakemake --unlock
+
+# Run Snakemake (keep --bind /data,/home so /data/courses and /data/users are accessible)
+snakemake --cores 8 --default-resources "threads=8" \
           --use-singularity \
           --singularity-args "--bind /data,/home --writable-tmpfs --fakeroot --pwd $PWD" \
           --rerun-incomplete --show-failed-logs
