@@ -380,6 +380,6 @@ rule plot_mutational_channels:
         plot96="06_mut_signatures/somatic_96channels.svg",
         table96="06_mut_signatures/somatic_mut_table.tsv"
     conda:
-        "envs/plot.yaml"
-    script:
-        "scripts/plot.py"
+        "envs/plotting.yaml"
+    shell:
+        "env PYTHONPATH='' ~/.venvs/plotting/bin/python scripts/plotting.py"

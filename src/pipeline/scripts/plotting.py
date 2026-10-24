@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 # 1. Load and filter variant data
-df = pd.read_csv(snakemake.input.tsv, sep="\t")
+df = pd.read_csv("06_mut_signatures/somatic_vcf_mut.tsv", sep="\t")
 df = df[
     (df["REF"].str.len() == 1)
     & (df["ALT"].str.len() == 1)
@@ -57,7 +57,7 @@ plt.xlabel("Substitution Type")
 plt.title("6-channel Mutational Spectrum")
 plt.xticks(rotation=0)
 plt.tight_layout()
-plt.savefig(snakemake.output.plot6)
+plt.savefig("06_mut_signatures/somatic_6channels.svg")
 plt.close()
 
 # 4. Save 96-channel plot
@@ -70,9 +70,9 @@ plt.xlabel("Trinucleotide Context")
 plt.title("96-channel Mutational Spectrum")
 plt.xticks(rotation=90, fontsize=6)
 plt.tight_layout()
-plt.savefig(snakemake.output.plot96)
+plt.savefig("06_mut_signatures/somatic_96channels.svg")
 plt.close()
 
 # 5. Save 96-channel table for MutationalPatterns in R
 counts_96.name = "tumor_sample"
-counts_96.to_csv(snakemake.output.table96, sep="\t", index=True)
+counts_96.to_csv("06_mut_signatures/somatic_mut_table.tsv", sep="\t", index=True)

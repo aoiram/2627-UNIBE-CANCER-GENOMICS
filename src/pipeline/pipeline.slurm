@@ -37,10 +37,21 @@ export PATH=~/.tmp_bin:$PATH
 # Pre-create the sequentially numbered directories to ensure clean execution
 mkdir -p 01_cleaned_data 02_qc 03_alignment 04_preprocessing 05_variants
 
+# For the last part
+rm -rf ~/.venvs/plotting
+# Create venv inheriting cluster modules
+python3 -m venv ~/.venvs/plotting
+# Notice the path: bin/activate
+source ~/.venvs/plotting/bin/activate
+# Install matplotlib directly into the venv
+# Force install into the virtual environment isolated from the cluster's modules
+env PYTHONPATH="" ~/.venvs/plotting/bin/pip install --no-cache-dir --ignore-installed pandas matplotlib
+env PYTHONPATH="" ~/.venvs/plotting/bin/python -c "import pandas, matplotlib; print('Venv ready!')"
+
 # Note : There can be some folder locking issues when a job get interrupted
 #        (ig by the end of the course reservation schedule),
 #        just add --unlock and rerun to unlock and then rerun normally
 snakemake --cores 12 --default-resources "threads=12" \
           --use-singularity \
-          --singularity-args "--bind /data:/data --fakeroot --writable-tmpfs --pwd $PWD" \
-          --rerun-incomplete --show-failed-logs --use-conda --conda-frontend conda
+          --singularity-args "--bind /data:/data,/usr:/usr,/:/ --fakeroot --writable-tmpfs --pwd $PWD" \
+          --rerun-incomplete --show-failed-logs
