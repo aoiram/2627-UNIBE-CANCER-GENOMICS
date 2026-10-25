@@ -11,7 +11,7 @@ COSMIC SBS1 and SBS7c profiles.
 
 ## Project status
 
-The workflow is written for the IBU cluster and is launched through Slurm.
+The workflow is written is launched through Slurm.
 The input data and supporting resources are provided through the course and
 cluster directories referenced by the `Snakefile`; they are not stored in this
 repository. The workflow therefore requires access to those paths, as well as
@@ -26,7 +26,6 @@ the configured annotation caches and Apptainer/Singularity images.
 │   └── pipeline/
 │       ├── Snakefile
 │       ├── pipeline.slurm
-│       ├── envs/plotting.yaml
 │       └── scripts/
 │           ├── 01_generate_random_coords.py
 │           ├── 02_apply_cosmic_signatures.py
@@ -122,16 +121,12 @@ The cluster launch script assumes:
 - Apptainer (the script supplies a Singularity compatibility wrapper).
 - The following tools available through the configured container images:
   FastQC, fastp, BWA, Samtools, GATK, MultiQC, bcftools, and VEP.
-- Python 3 with `pandas`, `matplotlib`, `numpy`, and `scipy` for plotting and
+- Python 3 for plotting and
   signature fitting.
 - The course reference and resource files listed near the top of the
   `Snakefile`, including the GRCh38 reference, exome intervals, dbSNP, known
   indels, germline resource, panel of normals, ClinVar, and VEP cache.
 
-The plotting environment specification is in
-[`src/pipeline/envs/plotting.yaml`](src/pipeline/envs/plotting.yaml), although
-[`src/pipeline/pipeline.slurm`](src/pipeline/pipeline.slurm) currently creates
-and updates `~/.venvs/plotting` directly.
 
 ## Running on the IBU cluster
 
@@ -152,8 +147,7 @@ and updates `~/.venvs/plotting` directly.
    time limit in [`src/pipeline/pipeline.slurm`](src/pipeline/pipeline.slurm).
 4. Submit the workflow , check the readme in `./src/`
 
-The script creates the numbered output directories, prepares the plotting
-virtual environment, unlocks the Snakemake working directory, and runs:
+The script creates the numbered output directories, unlocks the Snakemake working directory, and runs:
 
 ```bash
 snakemake --cores 8 --use-singularity --rerun-incomplete
