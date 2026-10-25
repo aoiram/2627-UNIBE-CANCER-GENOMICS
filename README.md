@@ -1,5 +1,11 @@
 # Cancer Genomics: Somatic Variant Calling and Mutational Signatures
 
+**Group 7**
+
+- Mario Amos
+- Isaac Ambrogetti
+- Marcos Valdivia
+
 This repository contains Group 7's cancer genomics course project. It implements
 a Snakemake workflow for paired normal/tumor short-read data, from read quality
 control through somatic variant calling, annotation, and mutational-signature
@@ -177,9 +183,3 @@ snakemake --dag | dot -Tsvg > dag.svg
 - **Reproducibility:** The simulation scripts seed Python's random number
   generator with `42`. The observed signature fitting uses fixed, hand-built
   reference profiles in `plotting.py`, not a downloaded COSMIC profile matrix.
-
-## Authors
-
-- Mario Amos
-- Isaac Ambrogetti
-- Marcos Valdivia
